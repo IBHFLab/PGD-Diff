@@ -664,7 +664,6 @@ elif page == "📥 Dataset Download":
         ("Brain", "generated_brain_peptides.txt"),
         ("Breast", "generated_breast_peptides.txt"),
         ("Cervix", "generated_cervix_peptides.txt"),
-        ("Colon", "generated_colon_peptides.txt"),
         ("Liver", "generated_liver_peptides.txt"),
         ("Lung", "generated_lung_peptides.txt"),
         ("Prostate", "generated_prostate_peptides.txt"),
