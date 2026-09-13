@@ -94,12 +94,11 @@ def load_cancer_mapping():
     if map_path2.exists():
         with open(map_path2, 'r') as f:
             return json.load(f)
+
+    st.warning("⚠️ 未找到 cancer_to_idx.json，使用默认 9 类映射")
     return {
-        "Breast": 0,
-        "Lung": 1,
-        "Colorectal": 2,
-        "Liver": 3,
-        "Leukemia": 4
+        "Blood": 0, "Brain": 1, "Breast": 2, "Cervix": 3,
+        "Liver": 4, "Lung": 5, "Prostate": 6, "Skin": 7,
     }
 
 # ================= 6. 模型加载 =================
@@ -134,60 +133,59 @@ def load_general_model():
 def load_conditional_model():
     """
     加载条件生成模型（Prefix-Tuned）
-    手动加载 checkpoint，过滤形状不匹配的键（容错）
+    从 checkpoint 的 hyper_parameters 读取构造参数，避免手写参数对不上
     """
     try:
+        import inspect
         from models.prefix_tuned.PGD_Diff_condition import PGD_Diff
-        
+
         ckpt_path = PROJECT_ROOT / "models" / "prefix_tuned" / "last.ckpt"
         if not ckpt_path.exists():
             st.error(f"条件模型 checkpoint 未找到: {ckpt_path}")
             return None
-        
-        cancer_map = load_cancer_mapping()
-        num_cancer_types = len(cancer_map)
+
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
-        # 1. 创建模型实例
-        model = PGD_Diff(
-            use_prefix_condition=True,
-            num_cancer_types=num_cancer_types,
-            condition_mode='cross_attn',
-            prefix_len=20,
-            loss_weight=1.0
-        )
-        
-        # 2. 加载 checkpoint
+
+        # 1. 加载 checkpoint，读取保存的超参数
         checkpoint = torch.load(str(ckpt_path), map_location=device)
+        hparams = checkpoint.get('hyper_parameters', {})
+        print(f"[DEBUG] checkpoint hyper_parameters keys: {list(hparams.keys())}")
+
+        # 2. 只保留 PGD_Diff.__init__ 认识的参数
+        valid_params = set(inspect.signature(PGD_Diff.__init__).parameters.keys())
+        valid_params.discard('self')
+        init_kwargs = {k: v for k, v in hparams.items() if k in valid_params}
+        print(f"[DEBUG] 使用 init_kwargs: {init_kwargs}")
+
+        # 3. 用正确的参数实例化
+        model = PGD_Diff(**init_kwargs)
+
+        # 4. 过滤形状不匹配的键后加载权重
         state_dict = checkpoint['state_dict']
-        
-        # 3. 过滤：只保留形状匹配的键（和通用模型一样的逻辑）
         model_state_dict = model.state_dict()
-        filtered_state_dict = {}
-        skipped_keys = []
-        
+        filtered, skipped = {}, []
+
         for key, value in state_dict.items():
-            if key in model_state_dict:
-                if value.shape == model_state_dict[key].shape:
-                    filtered_state_dict[key] = value
-                else:
-                    skipped_keys.append(f"{key} (shape mismatch)")
+            if key in model_state_dict and value.shape == model_state_dict[key].shape:
+                filtered[key] = value
             else:
-                skipped_keys.append(f"{key} (not in model)")
-        
-        if skipped_keys:
-            print(f"⚠️ 跳过了 {len(skipped_keys)} 个键")
-        
-        # 4. 加载过滤后的状态字典
-        model.load_state_dict(filtered_state_dict, strict=False)
+                skipped.append(key)
+
+        if skipped:
+            print(f"⚠️ 跳过 {len(skipped)} 个键，例如: {skipped[:5]}")
+
+        model.load_state_dict(filtered, strict=False)
         model.eval()
         model.to(device)
-        
-        print("✅ 条件模型加载成功！")
+
+        print(f"✅ 条件模型加载成功！num_cancer_types={model.num_cancer_types}, "
+              f"condition_mode={model.condition_mode}, prefix_len={model.prefix_len}")
         return model
-        
+
     except Exception as e:
         st.error(f"加载条件模型失败: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 # ================= 7. 生成函数 =================
@@ -208,14 +206,26 @@ def generate_general_peptides(model, length, num_sequences):
         return None
 
 def generate_conditional_peptides(model, cancer_type, length, num_sequences, cancer_map):
-    """条件生成：调用 denoise_seq_sample_with_prefix"""
+    """条件生成：cancer_idx → multi-hot 张量 → denoise_seq_sample_with_prefix"""
     if model is None:
         return None
     try:
         cancer_idx = cancer_map.get(cancer_type, 0)
         length_list = [length] * num_sequences
+
+        # 用 model 自己的 num_cancer_types 构建 multi-hot，避免维度不匹配
+        device = next(model.parameters()).device
+        cancer_multi_hot = torch.zeros(1, model.num_cancer_types, device=device)
+        if cancer_idx < model.num_cancer_types:
+            cancer_multi_hot[0, cancer_idx] = 1.0
+        else:
+            st.warning(
+                f"癌症类型 {cancer_type}(idx={cancer_idx}) 超出模型类别数 "
+                f"{model.num_cancer_types}，将按无条件方式生成。"
+            )
+
         sequences, _, _ = model.denoise_seq_sample_with_prefix(
-            cancer_idx=cancer_idx,
+            cancer_multi_hot=cancer_multi_hot,   # ← 关键：参数名是 cancer_multi_hot，不是 cancer_idx
             n_seq=num_sequences,
             seq_length=length_list,
             fasta_out_statue=False
@@ -223,6 +233,8 @@ def generate_conditional_peptides(model, cancer_type, length, num_sequences, can
         return sequences
     except Exception as e:
         st.error(f"条件生成失败: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
