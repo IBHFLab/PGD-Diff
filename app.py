@@ -361,7 +361,7 @@ if page == "🎯 Broad-Spectrum Generation":
     col1, col2 = st.columns(2)
     with col1:
         length = st.slider("Peptide Length", min_value=5, max_value=50, value=15)
-        num = st.slider("Number of Sequences", min_value=1, max_value=50, value=5)
+        num = st.slider("Number of Sequences", min_value=1, max_value=20, value=5)
         
     if st.button("🚀 Generate Sequences"):
         with st.spinner("Generating sequences..."):
@@ -389,7 +389,7 @@ elif page == "🎯 Cancer-Targeted Generation":
     with col2:
         length = st.slider("Peptide Length", min_value=5, max_value=50, value=18)
         
-    num = st.slider("Number of Sequences", min_value=1, max_value=50, value=5)
+    num = st.slider("Number of Sequences", min_value=1, max_value=20, value=5)
     
     if st.button("🚀 Generate Targeted Sequences"):
         with st.spinner(f"Generating sequences for {cancer_type}..."):
